@@ -1,0 +1,28 @@
+name: loan_tracker
+description: A new Flutter project.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  firebase_core: ^3.1.0
+  cloud_firestore: ^5.0.0
+  firebase_storage: ^12.1.0
+  image_picker: ^1.1.2
+  intl: ^0.19.0       # For currency formatting
+  google_fonts: ^6.2.1 # For better typography
+  percent_indicator: ^4.2.3 # For the loan progress bar
+  google_sign_in: ^6.2.1
+  firebase_auth: ^5.7.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

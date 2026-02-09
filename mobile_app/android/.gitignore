@@ -1,0 +1,28 @@
+# --- SECRETS (NEVER UPLOAD) ---
+**/google-services.json
+**/GoogleService-Info.plist
+**/key.properties
+**/*.keystore
+**/*.jks
+**/firebase_options.dart
+
+# --- FLUTTER JUNK ---
+**/build/
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.pub-cache/
+**/.packages
+**/pubspec.lock
+
+# --- ANDROID/IOS JUNK ---
+**/.gradle/
+**/gradle-wrapper.jar
+**/gradlew
+**/gradlew.bat
+**/local.properties
+**/GeneratedPluginRegistrant.java
+**/.cxx/
+**/.idea/
+**/.vscode/
+**/.DS_Store

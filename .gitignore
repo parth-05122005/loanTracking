@@ -1,0 +1,25 @@
+# --- SECRETS (BLOCK THESE EVERYWHERE) ---
+**/serviceAccountKey.json
+**/google-services.json
+**/GoogleService-Info.plist
+**/key.properties
+**/*.keystore
+**/*.jks
+**/firebase_options.dart
+**/.env
+**/venv/
+**/__pycache__/
+
+# --- FLUTTER JUNK ---
+**/build/
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.pub-cache/
+**/pubspec.lock
+
+# --- SYSTEM JUNK ---
+**/.gradle/
+**/.idea/
+**/.vscode/
+**/.DS_Store
