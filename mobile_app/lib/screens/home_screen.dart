@@ -2,22 +2,57 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:percent_indicator/circular_percent_indicator.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart'; // Optional: for Google Sign Out
 import 'upload_receipt_screen.dart';
-import 'login_screen.dart';
-import 'create_loan_screen.dart'; 
+import 'create_loan_screen.dart';
+import 'profile_screen.dart';
+import 'monthly_summary_screen.dart'; // <--- Ensure this is imported
 
 class HomeScreen extends StatelessWidget {
   final String uid;
-
   const HomeScreen({super.key, required this.uid}); 
+
+  // --- DELETE FUNCTION ---
+  Future<void> _deleteTransaction(BuildContext context, String txId) async {
+    bool confirm = await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Delete Transaction?"),
+        content: const Text("This action cannot be undone. Your balance will be updated."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false), 
+            child: const Text("Cancel", style: TextStyle(color: Colors.grey))
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Delete", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    ) ?? false;
+
+    if (confirm) {
+      await FirebaseFirestore.instance.collection('transactions').doc(txId).delete();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Transaction deleted"), 
+            backgroundColor: Colors.redAccent,
+            duration: Duration(seconds: 2),
+          )
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    bool isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    Color textColor = isDarkMode ? Colors.white : Colors.black87;
+    Color cardColor = isDarkMode ? const Color(0xFF1E1E1E) : Colors.white;
+
     return Scaffold(
-      appBar: _buildAppBar(context),
-      // 1. First Stream: Get the Loan Details (Limit, ID)
+      appBar: _buildAppBar(context, isDarkMode),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
             .collection('loans')
@@ -28,117 +63,75 @@ class HomeScreen extends StatelessWidget {
              return const Center(child: CircularProgressIndicator());
           }
           
-          // --- THE FIX: Handle "No Loan Found" Gracefully ---
           if (!loanSnapshot.hasData || loanSnapshot.data!.docs.isEmpty) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(30.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.account_balance_wallet_outlined, size: 80, color: Colors.green.shade200),
-                    const SizedBox(height: 20),
-                    const Text(
-                      "No Active Loan Profile", 
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black87)
-                    ),
-                    const SizedBox(height: 10),
-                    const Text(
-                      "It looks like you haven't set up your loan details yet.",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                    const SizedBox(height: 30),
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pushReplacement(context, MaterialPageRoute(
-                          builder: (_) => const CreateLoanScreen()
-                        ));
-                      },
-                      icon: const Icon(Icons.add_circle_outline),
-                      label: const Text("Setup Loan Profile"),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green[700],
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Text("User ID: ${uid.substring(0, 6)}...", style: TextStyle(color: Colors.grey[300], fontSize: 10)),
-                  ],
-                ),
-              ),
-            );
+            return _buildNoLoanView(context);
           }
 
-          // Loan Found! Proceed to show Dashboard
           var loanDoc = loanSnapshot.data!.docs.first;
           var loanData = loanDoc.data() as Map<String, dynamic>;
           String loanId = loanDoc.id;
           
-          // Safe Parsing of Sanctioned Amount
-          double sanctionedAmount = 0.0;
-          if (loanData['sanctioned_amount'] != null) {
-            sanctionedAmount = double.tryParse(loanData['sanctioned_amount'].toString()) ?? 0.0;
-          }
+          double sanctionedAmount = double.tryParse(loanData['sanctioned_amount']?.toString() ?? '0') ?? 0.0;
 
-          // 2. Second Stream: Get ALL Transactions for this loan
           return StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
                 .collection('transactions')
                 .where('loan_id', isEqualTo: loanId)
-                // .orderBy('timestamp', descending: true) // Keep commented if Index error persists
                 .snapshots(),
             builder: (context, txSnapshot) {
               if (txSnapshot.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());
               }
 
-              // 3. CALCULATE THE LIVE BALANCE
               double totalUtilized = 0.0;
               List<QueryDocumentSnapshot> sortedDocs = [];
 
               if (txSnapshot.hasData) {
                 sortedDocs = txSnapshot.data!.docs;
-                
-                // Manual Sort (Fixes the "Index" crash if you haven't created one in Firebase)
                 sortedDocs.sort((a, b) {
-                  var dataA = a.data() as Map<String, dynamic>;
-                  var dataB = b.data() as Map<String, dynamic>;
-                  Timestamp tA = dataA['timestamp'] ?? Timestamp.now();
-                  Timestamp tB = dataB['timestamp'] ?? Timestamp.now();
-                  return tB.compareTo(tA); // Newest first
+                  Timestamp tA = (a.data() as Map<String, dynamic>)['timestamp'] ?? Timestamp.now();
+                  Timestamp tB = (b.data() as Map<String, dynamic>)['timestamp'] ?? Timestamp.now();
+                  return tB.compareTo(tA);
                 });
 
-                // Calculate Sum
                 for (var doc in sortedDocs) {
                   var data = doc.data() as Map<String, dynamic>;
-                  double amount = double.tryParse(data['amount'].toString()) ?? 0.0;
-                  totalUtilized += amount;
+                  totalUtilized += double.tryParse(data['amount'].toString()) ?? 0.0;
                 }
               }
 
-              double currentBalance = sanctionedAmount - totalUtilized;
-              
-              // Prevent negative balance display
-              if (currentBalance < 0) currentBalance = 0;
+              double currentBalance = (sanctionedAmount - totalUtilized).clamp(0.0, double.infinity);
 
               return SingleChildScrollView(
                 padding: const EdgeInsets.all(20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Pass calculated values to the card
                     _buildBalanceCard(sanctionedAmount, totalUtilized, currentBalance),
                     
                     const SizedBox(height: 25),
-                    const Text("Recent Transactions", 
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    
+                    // --- ROW WITH TITLE AND BUTTON ---
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text("Recent Transactions", 
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: textColor)),
+                        
+                        TextButton(
+                          onPressed: () {
+                             Navigator.push(context, MaterialPageRoute(
+                               builder: (_) => MonthlySummaryScreen(loanId: loanId)
+                             ));
+                          },
+                          child: const Text("View Monthly", style: TextStyle(color: Colors.blue)),
+                        )
+                      ],
+                    ),
+                    
                     const SizedBox(height: 15),
                     
-                    // Pass the sorted list directly
-                    _buildTransactionList(sortedDocs),
+                    _buildTransactionList(context, sortedDocs, cardColor, textColor),
                   ],
                 ),
               );
@@ -148,7 +141,6 @@ class HomeScreen extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
-          // Use the loan ID we found to open upload screen
           FirebaseFirestore.instance
             .collection('loans')
             .where('beneficiary_uid', isEqualTo: uid)
@@ -158,10 +150,6 @@ class HomeScreen extends StatelessWidget {
                  Navigator.push(context, MaterialPageRoute(
                   builder: (_) => UploadReceiptScreen(loanId: snap.docs.first.id)
                 ));
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Please set up your loan profile first."))
-                );
               }
             });
         },
@@ -172,47 +160,81 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  PreferredSizeWidget _buildAppBar(BuildContext context) {
+  PreferredSizeWidget _buildAppBar(BuildContext context, bool isDarkMode) {
     return AppBar(
-      title: const Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text("Welcome Back,", style: TextStyle(fontSize: 14, color: Colors.grey)),
-          Text("Beneficiary", style: TextStyle(fontWeight: FontWeight.bold)),
-        ],
+      backgroundColor: Colors.transparent, 
+      elevation: 0,
+      title: FutureBuilder<DocumentSnapshot>(
+        future: FirebaseFirestore.instance.collection('users').doc(uid).get(),
+        builder: (context, snapshot) {
+          String userName = "Beneficiary"; 
+          if (snapshot.hasData && snapshot.data!.exists) {
+            userName = snapshot.data!.get('name') ?? "Beneficiary";
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text("Welcome Back,", style: TextStyle(fontSize: 14, color: Colors.grey)),
+              Text(userName, style: TextStyle(fontWeight: FontWeight.bold, color: isDarkMode ? Colors.white : Colors.black)), 
+            ],
+          );
+        },
       ),
       actions: [
-        IconButton(
-          icon: const Icon(Icons.logout, color: Colors.redAccent), 
-          onPressed: () async {
-            // 1. Sign out from Firebase
-            await FirebaseAuth.instance.signOut();
-            
-            // 2. Sign out from Google (Clears cached account selection)
-            try {
-              await GoogleSignIn().signOut();
-            } catch (e) {
-              // Ignore if Google Sign In wasn't used
-            }
-
-            // 3. FORCE Navigation back to Login (Clear the stack)
-            if (context.mounted) {
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (context) => const LoginScreen()),
-                (route) => false, // This removes all previous routes
-              );
-            }
-          }
+        Padding(
+          padding: const EdgeInsets.only(right: 16.0),
+          child: GestureDetector(
+            onTap: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => ProfileScreen(uid: uid)));
+            },
+            child: CircleAvatar(
+              backgroundColor: Colors.green.shade100,
+              child: Icon(Icons.person, color: Colors.green.shade800),
+            ),
+          ),
         ),
       ],
+    );
+  }
+
+  Widget _buildNoLoanView(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(30.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.account_balance_wallet_outlined, size: 80, color: Colors.green.shade200),
+            const SizedBox(height: 20),
+            const Text("No Active Loan Profile", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            const Text("It looks like you haven't set up your loan details yet.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 30),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.pushReplacement(context, MaterialPageRoute(
+                  builder: (_) => const CreateLoanScreen()
+                ));
+              },
+              icon: const Icon(Icons.add_circle_outline),
+              label: const Text("Setup Loan Profile"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green[700],
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   Widget _buildBalanceCard(double sanctioned, double utilized, double balance) {
     double percent = 0.0;
     if (sanctioned > 0) {
-      percent = utilized / sanctioned;
-      if (percent > 1.0) percent = 1.0; // Cap at 100%
+      percent = (utilized / sanctioned).clamp(0.0, 1.0);
     }
 
     final currency = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
@@ -221,13 +243,14 @@ class HomeScreen extends StatelessWidget {
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Colors.green.shade800, Colors.green.shade500],
+          colors: [Colors.green.shade900, Colors.green.shade600, Colors.teal.shade400],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
+          stops: const [0.1, 0.6, 1.0],
         ),
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
-          BoxShadow(color: Colors.green.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 5))
+          BoxShadow(color: Colors.green.withOpacity(0.3), blurRadius: 15, offset: const Offset(0, 10))
         ],
       ),
       child: Column(
@@ -284,7 +307,42 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildTransactionList(List<QueryDocumentSnapshot> docs) {
+  Widget _getCategoryIcon(String category) {
+    category = category.toLowerCase();
+    IconData icon;
+    Color color;
+
+    if (category.contains('food') || category.contains('eat')) {
+      icon = Icons.restaurant;
+      color = Colors.orange;
+    } else if (category.contains('travel') || category.contains('fuel') || category.contains('transport')) {
+      icon = Icons.local_gas_station;
+      color = Colors.blue;
+    } else if (category.contains('tool') || category.contains('equipment') || category.contains('repair')) {
+      icon = Icons.build;
+      color = Colors.grey.shade700;
+    } else if (category.contains('seed') || category.contains('farm') || category.contains('fert')) {
+      icon = Icons.eco;
+      color = Colors.green;
+    } else if (category.contains('labor') || category.contains('wage')) {
+      icon = Icons.group;
+      color = Colors.purple;
+    } else {
+      icon = Icons.receipt_long;
+      color = Colors.teal;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Icon(icon, color: color, size: 24),
+    );
+  }
+
+  Widget _buildTransactionList(BuildContext context, List<QueryDocumentSnapshot> docs, Color cardColor, Color textColor) {
     if (docs.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(20),
@@ -297,40 +355,80 @@ class HomeScreen extends StatelessWidget {
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: docs.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
         var tx = docs[index].data() as Map<String, dynamic>;
+        String txId = docs[index].id; 
         
-        // SAFE PARSING
         String vendor = tx['vendor_name'] ?? 'Unknown Vendor';
+        String category = tx['category'] ?? 'General';
         double amount = double.tryParse(tx['amount'].toString()) ?? 0.0;
+        String? receiptUrl = tx['receipt_url'];
         
         String dateString = "Pending";
         if (tx['timestamp'] != null) {
           try {
             Timestamp t = tx['timestamp'];
-            dateString = DateFormat('dd MMM yyyy').format(t.toDate());
+            dateString = DateFormat('dd MMM').format(t.toDate());
           } catch (e) {
-            dateString = "Date Error";
+            dateString = "Error";
           }
         }
 
         return Card(
-          elevation: 2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: ListTile(
-            leading: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.green.shade50,
-                borderRadius: BorderRadius.circular(12)
+          elevation: 0,
+          color: cardColor,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: Colors.grey.withOpacity(0.2)),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onLongPress: () => _deleteTransaction(context, txId),
+            onTap: () {
+              if (receiptUrl != null && receiptUrl.isNotEmpty) {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => Scaffold(
+                  backgroundColor: Colors.black,
+                  appBar: AppBar(backgroundColor: Colors.black, iconTheme: const IconThemeData(color: Colors.white)),
+                  body: Center(
+                    child: Hero(
+                      tag: receiptUrl,
+                      child: Image.network(receiptUrl),
+                    ),
+                  ),
+                )));
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No receipt image attached")));
+              }
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  _getCategoryIcon(category),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(vendor, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: textColor)),
+                        const SizedBox(height: 4),
+                        Text(category, style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text("- ₹${amount.toStringAsFixed(0)}", 
+                        style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.redAccent, fontSize: 16)),
+                      const SizedBox(height: 4),
+                      Text(dateString, style: TextStyle(color: Colors.grey[400], fontSize: 10)),
+                    ],
+                  )
+                ],
               ),
-              child: Icon(Icons.shopping_bag, color: Colors.green.shade700),
             ),
-            title: Text(vendor, style: const TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: Text(dateString),
-            trailing: Text("- ₹${amount.toStringAsFixed(0)}", 
-              style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
           ),
         );
       },
